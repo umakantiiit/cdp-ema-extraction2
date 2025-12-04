@@ -103,17 +103,29 @@ st.markdown("---")
 cdp_ema_prompt = """prompt here"""  # Replace with your actual prompt
 
 # Function to clean JSON response
+# Function to clean JSON response
 def clean_json_response(response_text):
-    """Remove `````` from the response and parse JSON"""
-    # Remove `````` at the end
+    """
+    Clean the response text by removing ```
+    """
     cleaned = response_text.strip()
     
-    # Remove `````` patterns
-    cleaned = re.sub(r'^```
-    cleaned = re.sub(r'^```\s*', '', cleaned)
-    cleaned = re.sub(r'\s*```
+    # Define markers using string concatenation to avoid syntax issues
+    json_marker = "`" + "`" + "`" + "json"
+    code_marker = "`" + "`" + "`"
     
-    return cleaned
+    # Remove ```json or ```
+    if cleaned.startswith(json_marker):
+        cleaned = cleaned[len(json_marker):]
+    elif cleaned.startswith(code_marker):
+        cleaned = cleaned[len(code_marker):]
+    
+    # Remove ``` at the end
+    if cleaned.endswith(code_marker):
+        cleaned = cleaned[:-len(code_marker)]
+    
+    return cleaned.strip()
+
 
 # Function to display JSON beautifully
 def display_json_beautifully(json_data):
