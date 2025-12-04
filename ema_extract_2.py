@@ -210,7 +210,7 @@ input_text = st.text_area(
 st.markdown("")
 
 # Extract Button
-col1, col2, col3 = st.columns()[1]
+col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     extract_button = st.button("🔍 Extract Info", use_container_width=True)
 
