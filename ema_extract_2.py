@@ -630,7 +630,7 @@ if extract_button:
                 # Import and initialize Gemini client
                 from google import genai
                 
-                client = genai.Client(vertexai=True,api_key=api_key)
+                client = genai.Client(api_key=api_key)
                 
                 # Make API call
                 response = client.models.generate_content(
