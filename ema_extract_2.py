@@ -110,9 +110,7 @@ Your task is to analyze the provided EMA clinical text and convert it into a sin
 - Within the `Disease_level_full_text`, identify every distinct "Indication".
 - Create a separate JSON object for *each* indication found.
 - Donot separate an indication just for treatment modality, Treatment line. U can use comma to separate them.
-   Example - Treatment Line: {"value":"First line","confidence_score":1}
-             Treatment Line: {"value":"Second line","confidence_score":1}
-             Correct extraction - Treatment Line: {"value":"First line,Second line","confidence_score":1}
+   
 
 ## 2. Field-Specific Definitions & Extraction Logic
 
