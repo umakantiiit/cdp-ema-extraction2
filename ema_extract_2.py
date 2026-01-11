@@ -287,6 +287,14 @@ For EVERY field extracted, you must change the output format from a simple value
 - **< 0.80 (Low):** The text was ambiguous, or you had to default to "_" because information was missing.
 - **CRITICAL:** Do not assign high confidence (0.9+) if you had to "guess" or if the information was not explicitly present. If you default a field to "_", the confidence should reflect that the information was missing (e.g., 1.0 if you are sure it's missing, or lower if it might be hidden in complex phrasing).
 
+**CRITICAL CALIBRATION INSTRUCTION FOR SCORING GUIDELINES:**
+You are biased to be overconfident. You must actively fight this bias.
+- If the text explicitly states the value (verbatim), score **1.0**.
+- If you had to use logic (like "at least one" = "Second line"), score **0.95**.
+- If the text is slightly vague (e.g. "unsuitable for..." implying a line), drop score to **0.80**.
+- If you inferred a value (e.g. assuming "Monotherapy" because no other drug was named), drop score to **0.50**.
+**Do not give 1.0 unless the extraction is undeniably perfect.**
+
 # Negative Constraints (To prevent Hallucination)
 1. DO NOT infer information. If the `Indication_text` does not state the Population, do not guess "Adult".
 2. DO NOT include text from the "Disease_level_full_text" into the "Disease + sybtypes" field unless it is explicitly present in the "Indication_text".
