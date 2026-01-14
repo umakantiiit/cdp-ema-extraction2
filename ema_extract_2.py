@@ -102,15 +102,51 @@ You are an expert Clinical Data Analyst and Regulatory Affairs Specialist specia
 # Objective
 Your task is to analyze the provided EMA clinical text and convert it into a single valid JSON array. The text contains various "Primary Disease Categories," and within those categories, multiple specific "Indications."
 
+Each extracted field MUST include:
+- value
+- evidence
+- confidence
+
+# Global Confidence Rules (STRICT – DO NOT VIOLATE)
+
+Confidence must be a numeric value between 0.0 and 1.0 ONLY.
+
+Assign confidence as follows:
+
+- 0.90 – 1.00  
+  → Value is explicitly and unambiguously stated in the Indication_text.
+
+- 0.80 – 0.89  
+  → Value is clearly stated but slightly paraphrased.
+
+- 0.60 – 0.69  
+  → Value is inferred from context or multiple statements.
+
+- 0.50 – 0.59  
+  → Text is ambiguous OR model is unsure.
+
+- < 0.50  
+  → Evidence is missing or weak.
+
+SPECIAL CASES (MANDATORY):
+- If evidence = "" AND value is present → confidence MUST be < 0.50
+- If value = null because information is absent → confidence ≤ 0.30
+- If value = null due to ambiguity → confidence between 0.50 – 0.60
+- If value is not mentioned at all but absence is clear → confidence 0.60 – 0.70
+
+Each field must be scored independently.
+
+---
+
 # Extraction Rules (Strict Compliance Required)
 
 ## 1. High-Level Logic
-- The input text is divided into sections based on disease types (e.g., "Melanoma", "Non-small cell lung cancer").
-- For each section, capture the `Disease_level_full_text`. This is the raw text for that entire disease section.
-- Within the `Disease_level_full_text`, identify every distinct "Indication".
-- Create a separate JSON object for *each* indication found.
-- Donot separate an indication just for treatment modality, Treatment line. U can use comma to separate them.
-   
+- The input text is divided into sections based on disease types.
+- For each section, capture the Disease_level_full_text.
+- Identify every distinct Indication within each disease section.
+- Create a separate JSON object for EACH indication.
+
+---
 
 ## 2. Field-Specific Definitions & Extraction Logic
 
@@ -121,18 +157,37 @@ Your task is to analyze the provided EMA clinical text and convert it into a sin
 - Bad Example: {"Disease": "gastric, small intestine, or biliary cancer"}
 - Good Example: [{"Disease": "gastric cancer"}, {"Disease": "small intestine cancer"}, {"Disease": "biliary cancer"}]
 - **Example:** "Melanoma", "Non-small cell lung cancer (NSCLC)".
-- DONOT SPLIT THE PRIMARY DISEASE IF ONLY Treatment modality DIFFERS and everything else is same.
+- DONOT SPLIT THE PRIMARY DISEASE IF ONLY Treatment modality DIFFERS and everything else is same. 
 
+Output structure:
+
+
+
+---
+
+### **Disease_level_full_text**
 ### **Disease_level_full_text**
 - **Source:** The entire text block belonging to that Primary Disease Category.
 - **Rule:** This text will repeat identically for every indication object that belongs to this category.
+-  Evidence = same text.
+-  Confidence = 1.0
+
+---
 
 ### **Indication #**
 - **Logic:** An integer counter (1, 2, 3...) representing the specific indication sequence within that Primary Disease Category. Reset to 1 for a new Disease Category.
+- Evidence = implicit sequencing.
+- Confidence = 1.0
+
+---
 
 ### **Indication_text**
 - **Source:** The specific sentence(s) defining who and what is being treated.
 - **Constraint:** Stop extracting when the text moves to a new patient population or a different drug combination.
+- Evidence = exact extracted text.
+- Confidence = 1.0
+
+---
 
 ### **Treatment line**
 - **Source:** EXTRACT ONLY FROM "Indication_text".
@@ -175,6 +230,19 @@ Your task is to analyze the provided EMA clinical text and convert it into a sin
      - OUTPUT: "_"
 
 
+Evidence:
+- Quote the phrase used to derive the line.
+- If none found → evidence = ""
+
+Confidence:
+- Explicit mention → ≥ 0.90
+- Inferred → 0.60 – 0.69
+- Ambiguous → 0.50 – 0.59
+- No evidence but value filled → < 0.50
+- Default "_" → confidence ≤ 0.30
+
+---
+
 ### **Treatment modality**
 - **Source:** EXTRACT ONLY FROM "Indication_text".
 - **Logic:** Look for these keywords and combine them with commas if multiple exist:
@@ -199,9 +267,20 @@ Your task is to analyze the provided EMA clinical text and convert it into a sin
   - If Adjunct + Monotherapy → output “Adjunct, Monotherapy”.
   - If Adjunct + Monotherapy + Combination → output “Adjunct, Monotherapy, Combination”.
   - If Neoadjuvant followed by Adjuvant with different modalities → output: “Neoadjuvant, Adjuvant, Combination, Monotherapy”.
-  IMPORTANT
+  IMPORTANT 
   IF NO TREATMENT MODALITY ARE MENTIONED THEN DONOT ASSUME IT AS MONOTHERAPY. KEEP IT AS "_"
 
+Evidence:
+- Quote exact modality phrase(s).
+- Empty if none.
+
+Confidence:
+- Explicit → ≥ 0.90
+- Inferred → 0.60 – 0.69
+- Empty evidence + value → < 0.50
+- "_" → ≤ 0.30
+
+---
 
 ### **Population**
 - **Source:** EXTRACT ONLY FROM "Indication_text".
@@ -233,12 +312,24 @@ Your task is to analyze the provided EMA clinical text and convert it into a sin
   - If no text age and no numeric age is present, output “_”.
   - Never default to Adult.
   - Never guess the population.
-
-
 **Final Formatting:**
 - Join multiple matches with a comma (e.g., "Adult, Adolescent").
 - If no population is mentioned, valid output is null or inferred from context only if highly obvious, otherwise "_".
 
+
+Evidence:
+- Quote age or population phrase.
+- Empty if none.
+
+Confidence:
+- Explicit age/population → ≥ 0.90
+- Numeric inference → 0.70 – 0.85
+- Ambiguous → 0.50 – 0.59
+- "_" → ≤ 0.30
+
+---
+
+### **Disease + sybtypes**
 ### **Disease + sybtypes**
 - **Source:** EXTRACT ONLY FROM "Indication_text".
 - **Logic:** Extract the specific condition description, stage, or mutation status mentioned.
@@ -252,879 +343,808 @@ Instructions to extract text for Disease+subtypes:
 Start by identifying the core disease name (e.g., "Type 2 diabetes mellitus", "Melanoma").
 
 Keep specific disease modifiers found immediately around the disease name:
+
 "insufficiently controlled"
+
 "metastatic", "advanced", "resectable", "unresectable"
+
 Specific genetic mutations (e.g., "PD-L1 positive", "BRAF V600 mutation")
+
 Risk levels (e.g., "at high risk of recurrence")
 
 REMOVE all text related to:
+
 Treatment Context: "as an adjunct to diet and exercise", "in combination with...", "as monotherapy".
+
 Rationale/Reasoning: "when metformin is considered inappropriate", "due to intolerance".
+
 Treatment History (unless part of the patient definition): "after failure of...", "progressing on...". ( Note: Only keep these if they define the patient group, like 'relapsed/refractory'. If it just describes the timing, leave it out.)
 
 Examples for Training:
+
 Text: "treatment of adults with insufficiently controlled type 2 diabetes mellitus as an adjunct to diet and exercise"
+
 Bad Extraction: "insufficiently controlled type 2 diabetes mellitus as an adjunct to diet and exercise"
+
 Good Extraction: "insufficiently controlled type 2 diabetes mellitus"
 
 Text: "treatment of advanced melanoma in adults progressing on platinum-based therapy"
+
 Good Extraction: "advanced melanoma" (Note: "progressing on..." is captured in Treatment Line, not Disease).
 
 Text: "treatment of adults with MSI-H colorectal cancer"
+
 Good Extraction: "MSI-H colorectal cancer"
 
-DONOT EXTRACT TEXT WHICH WE HAVE ALREADY EXTRACT IN POPULATION , TREATMENT MODALITY AND TREATMENT LINE.
+DONOT EXTRACT TEXT WHICH WE HAVE ALREADY EXTRACT IN POPULATION , TREATMENT MODALITY AND TREATMENT LINE. 
 
-## 3. Confidence Scoring & Output Structure (MANDATORY NEW REQUIREMENT)
+Evidence:
+- Quote exact disease-modifying phrase.
+- Empty if none.
 
-For EVERY field extracted, you must change the output format from a simple value to an object containing:
-1. `"value"`: The extracted text or data.
-2. `"confidence_score"`: A float between `0.0` and `1.0` representing your certainty.
+Confidence:
+- Explicit modifiers → ≥ 0.90
+- Partial inference → 0.60 – 0.69
+- Ambiguous → 0.50 – 0.59
+- Null → ≤ 0.30
 
-**Scoring Guidelines to prevent Hallucination:**
-- **0.95 - 1.0 (High):** The value is explicitly stated in the text verbatim OR follows a strict logical rule (e.g. "+1 logic" on line count) without ambiguity.
-- **0.80 - 0.94 (Medium):** The value required inference from context, or the phrasing was slightly complex.
-- **< 0.80 (Low):** The text was ambiguous, or you had to default to "_" because information was missing.
-- **CRITICAL:** Do not assign high confidence (0.9+) if you had to "guess" or if the information was not explicitly present. If you default a field to "_", the confidence should reflect that the information was missing (e.g., 1.0 if you are sure it's missing, or lower if it might be hidden in complex phrasing).
+---
 
-**CRITICAL CALIBRATION INSTRUCTION FOR SCORING GUIDELINES:**
-You are biased to be overconfident. You must actively fight this bias.
-- If the text explicitly states the value (verbatim), score **1.0**.
-- If you had to use logic (like "at least one" = "Second line"), score **0.95**.
-- If the text is slightly vague (e.g. "unsuitable for..." implying a line), drop score to **0.80**.
-- If you inferred a value (e.g. assuming "Monotherapy" because no other drug was named), drop score to **0.50**.
-**Do not give 1.0 unless the extraction is undeniably perfect.**
 
 # Negative Constraints (To prevent Hallucination)
 1. DO NOT infer information. If the `Indication_text` does not state the Population, do not guess "Adult".
 2. DO NOT include text from the "Disease_level_full_text" into the "Disease + sybtypes" field unless it is explicitly present in the "Indication_text".
 3. DO NOT alter the terminology used in the text (e.g., if it says "unresectable", do not change it to "non-operable").
 
-# One-Shot Example (Use this structure exactly)
+
+---
+
+# One-Shot Example
 
 **Input Text Segment:**
 4. 4.1 CLINICAL PARTICULARS Therapeutic indications Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older. Relative to nivolumab monotherapy, an increase in progression-free survival (PFS) and overall survival (OS) for the combination of nivolumab with ipilimumab is established only in patients with low tumour PD-L1 expression (see sections 4.4 and 5.1). Adjuvant treatment of melanoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection (see section 5.1). Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. 2 Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression â‰¥ 1% (see section 5.1 for selection criteria). Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression â‰¥ 1% (see section 5.1 for selection criteria). Malignant pleural mesothelioma (MPM) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable malignant pleural mesothelioma. Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1). Classical Hodgkin lymphoma (cHL) OPDIVO as monotherapy is indicated for the treatment of adult patients with relapsed or refractory classical Hodgkin lymphoma after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin. Squamous cell cancer of the head and neck (SCCHN) OPDIVO as monotherapy is indicated for the treatment of recurrent or metastatic squamous cell cancer of the head and neck in adults progressing on or after platinum-based therapy (see section 5.1). Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression â‰¥ 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1). 3 Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC) OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer; treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy (see section 5.1). Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression â‰¥ 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression â‰¥ 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy. Adjuvant treatment of oesophageal or gastro-oesophageal junction cancer (OC or GEJC) OPDIVO as monotherapy is indicated for the adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease following prior neoadjuvant chemoradiotherapy (see section 5.1). Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma whose tumours express PD-L1 with a combined positive score (CPS) â‰¥ 5. Hepatocellular carcinoma (HCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma.
 
 
-**Output JSON Format (With Confidence Scores):**
+**Output JSON:**
+
 [
-    {
-        "Primary Disease_category": {
-            "value": "Melanoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older. Relative to nivolumab monotherapy, an increase in progression-free survival (PFS) and overall survival (OS) for the combination of nivolumab with ipilimumab is established only in patients with low tumour PD-L1 expression (see sections 4.4 and 5.1). Adjuvant treatment of melanoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection (see section 5.1)",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0 (High confidence)
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy,Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult, Adolescent",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "advanced (unresectable or metastatic)",
-            "confidence_score": 1.0
-        }
+  {
+    "Primary Disease_category": {
+      "value": "Melanoma",
+      "evidence": "Melanoma",
+      "confidence": 0.95
     },
-    {
-        "Primary Disease_category": {
-            "value": "Melanoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older. Relative to nivolumab monotherapy, an increase in progression-free survival (PFS) and overall survival (OS) for the combination of nivolumab with ipilimumab is established only in patients with low tumour PD-L1 expression (see sections 4.4 and 5.1). Adjuvant treatment of melanoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Adjuvant, Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult, Adolescent",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease",
-            "confidence_score": 1.0
-        }
+    "Disease_level_full_text": {
+      "value": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated...",
+      "evidence": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated...",
+      "confidence": 1.0
     },
-    {
-        "Primary Disease_category": {
-            "value": "Non-small cell lung cancer (NSCLC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria). Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated \nfor the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no \nsensitising EGFR mutation or ALK translocation.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation",
-            "confidence_score": 1.0
-        }
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
     },
-    {
-        "Primary Disease_category": {
-            "value": "Non-small cell lung cancer (NSCLC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria). Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small \ncell lung cancer after prior chemotherapy in adults.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "locally advanced or metastatic non-small \ncell lung cancer",
-            "confidence_score": 1.0
-        }
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older.",
+      "evidence": "OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older.",
+      "confidence": 1.0
     },
-    {
-        "Primary Disease_category": {
-            "value": "Non-small cell lung cancer (NSCLC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria). Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 3,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination, Neoadjuvant",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "resectable non-small cell lung cancer at high risk of recurrence",
-            "confidence_score": 1.0
-        }
+    "Treatment line": {
+      "value": "_",
+      "evidence": "",
+      "confidence": 0.28
     },
-    {
-        "Primary Disease_category": {
-            "value": "Non-small cell lung cancer (NSCLC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria). Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 4,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression \u2265 1% (see section 5.1 for selection criteria).",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination, Neoadjuvant, Adjuvant, Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "resectable non-small \ncell lung cancer at high risk of recurrence",
-            "confidence_score": 1.0
-        }
+    "Treatment modality": {
+      "value": "Monotherapy,Combination",
+      "evidence": "as monotherapy or in combination with ipilimumab",
+      "confidence": 0.96
     },
-    {
-        "Primary Disease_category": {
-            "value": "Malignant pleural mesothelioma (MPM)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Malignant pleural mesothelioma (MPM) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable malignant pleural mesothelioma.",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable malignant pleural mesothelioma.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable malignant pleural mesothelioma",
-            "confidence_score": 1.0
-        }
+    "Population": {
+      "value": "Adult, Adolescent",
+      "evidence": "adults and adolescents 12 years of age and older",
+      "confidence": 0.94
     },
-    {
-        "Primary Disease_category": {
-            "value": "Renal cell carcinoma (RCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "advanced renal cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Renal cell carcinoma (RCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "intermediate/poor-risk advanced renal cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Renal cell carcinoma (RCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 3,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "advanced renal cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Classical Hodgkin lymphoma (cHL)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Classical Hodgkin lymphoma (cHL) OPDIVO as monotherapy is indicated for the treatment of adult patients with relapsed or refractory classical Hodgkin lymphoma after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin.",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of adult patients with relapsed or refractory classical Hodgkin lymphoma after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Third line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "relapsed or refractory classical Hodgkin lymphoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Squamous cell cancer of the head and neck (SCCHN)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Squamous cell cancer of the head and neck (SCCHN) OPDIVO as monotherapy is indicated for the treatment of recurrent or metastatic squamous cell cancer of the head and neck in adults progressing on or after platinum-based therapy",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of recurrent or metastatic squamous cell cancer of the head and neck in adults progressing on or after platinum-based therapy",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "recurrent or metastatic squamous cell cancer of the head and neck",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Urothelial carcinoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression \u2265 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma.",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable or metastatic urothelial carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Urothelial carcinoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression \u2265 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1).",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "locally advanced unresectable or metastatic urothelial carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Urothelial carcinoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression \u2265 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1)",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 3,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression \u2265 1%, who are at high risk of recurrence after undergoing radical resection of MIUC",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy,Adjuvant",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression \u2265 1%, who are at high risk of recurrence",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC) OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer; treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable or metastatic colorectal cancer",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC) OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer; treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings-treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "metastatic colorectal cancer",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 2,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression \u2265 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 3,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Oesophageal or gastro-oesophageal junction cancer (OC or GEJC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Adjuvant treatment of oesophageal or gastro-oesophageal junction cancer (OC or GEJC) OPDIVO as monotherapy is indicated for the adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease following prior neoadjuvant chemoradiotherapy",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease following prior neoadjuvant chemoradiotherapy",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "Second line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Monotherapy,Adjuvant",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma whose tumours express PD-L1 with a combined positive score (CPS) \u2265 5",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma whose tumours express PD-L1 with a combined positive score (CPS) \u2265 5",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Hepatocellular carcinoma (HCC)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "First line",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "Combination",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "unresectable or advanced hepatocellular carcinoma",
-            "confidence_score": 1.0
-        }
-    },
-    {
-        "Primary Disease_category": {
-            "value": "Neovascular (wet) age-related macular degeneration (AMD)",
-            "confidence_score": 1.0
-        },
-        "Disease_level_full_text": {
-            "value": "Lucentis is indicated in adults for: The treatment of neovascular (wet) age-related macular degeneration (AMD)",
-            "confidence_score": 1.0
-        },
-        "Indication #": {
-            "value": 1,
-            "confidence_score": 1.0
-        },
-        "Indication_text": {
-            "value": "Lucentis is indicated in adults for: The treatment of neovascular (wet) age-related macular degeneration (AMD)",
-            "confidence_score": 1.0
-        },
-        "Treatment line": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Treatment modality": {
-            "value": "_",
-            "confidence_score": 1.0
-        },
-        "Population": {
-            "value": "Adult",
-            "confidence_score": 1.0
-        },
-        "Disease + sybtypes": {
-            "value": "neovascular (wet) age-related macular degeneration (AMD)",
-            "confidence_score": 1.0
-        }
+    "Disease + sybtypes": {
+      "value": "advanced (unresectable or metastatic) melanoma",
+      "evidence": "advanced (unresectable or metastatic) melanoma",
+      "confidence": 0.97
     }
+  },
+  [
+  {
+    "Primary Disease_category": {
+      "value": "Melanoma",
+      "evidence": "Melanoma",
+      "confidence": 0.95
+    },
+    "Disease_level_full_text": {
+      "value": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated for the treatment of advanced (unresectable or metastatic) melanoma in adults and adolescents 12 years of age and older. Relative to nivolumab monotherapy, an increase in progression-free survival (PFS) and overall survival (OS) for the combination of nivolumab with ipilimumab is established only in patients with low tumour PD-L1 expression (see sections 4.4 and 5.1). Adjuvant treatment of melanoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection",
+      "evidence": "Melanoma OPDIVO as monotherapy or in combination with ipilimumab is indicated...",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 2,
+      "evidence": "2nd indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease who have undergone complete resection.",
+      "evidence": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adults and adolescents 12 years of age and older with Stage IIB or IIC melanoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "_",
+      "evidence": "",
+      "confidence": 0.28
+    },
+    "Treatment modality": {
+      "value": "Adjuvant, Monotherapy",
+      "evidence": "adjuvant treatment ... as monotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult, Adolescent",
+      "evidence": "adults and adolescents 12 years of age and older",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease",
+      "evidence": "Stage IIB or IIC melanoma, or melanoma with involvement of lymph nodes or metastatic disease",
+      "confidence": 0.95
+    }
+  },
+
+  {
+    "Primary Disease_category": {
+      "value": "Non-small cell lung cancer (NSCLC)",
+      "evidence": "Non-small cell lung cancer (NSCLC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment...",
+      "evidence": "Non-small cell lung cancer (NSCLC) OPDIVO in combination...",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation.",
+      "evidence": "first-line treatment of metastatic non-small cell lung cancer",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with ipilimumab and 2 cycles of platinum-based chemotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "in adults",
+      "confidence": 0.93
+    },
+    "Disease + sybtypes": {
+      "value": "non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation",
+      "evidence": "metastatic non-small cell lung cancer ... no sensitising EGFR mutation or ALK translocation",
+      "confidence": 0.94
+    }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Non-small cell lung cancer (NSCLC)", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%. Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%.", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 1.0 },
+    "Indication #": { "value": 2, "evidence": "2nd indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults.", "evidence": "after prior chemotherapy", "confidence": 1.0 },
+    "Treatment line": { "value": "Second line", "evidence": "after prior chemotherapy", "confidence": 0.95 },
+    "Treatment modality": { "value": "Monotherapy", "evidence": "as monotherapy", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "in adults", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "locally advanced or metastatic non-small cell lung cancer", "evidence": "locally advanced or metastatic non-small cell lung cancer", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Non-small cell lung cancer (NSCLC)", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%. Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%.", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 1.0 },
+    "Indication #": { "value": 3, "evidence": "3rd indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%.", "evidence": "neoadjuvant treatment of resectable non-small cell lung cancer", "confidence": 1.0 },
+    "Treatment line": { "value": "_", "evidence": "", "confidence": 0.30 },
+    "Treatment modality": { "value": "Combination, Neoadjuvant", "evidence": "in combination with platinum-based chemotherapy ... neoadjuvant treatment", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "resectable non-small cell lung cancer at high risk of recurrence", "evidence": "resectable non-small cell lung cancer at high risk of recurrence", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Non-small cell lung cancer (NSCLC)", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Non-small cell lung cancer (NSCLC) OPDIVO in combination with ipilimumab and 2 cycles of platinum-based chemotherapy is indicated for the first-line treatment of metastatic non-small cell lung cancer in adults whose tumours have no sensitising EGFR mutation or ALK translocation. OPDIVO as monotherapy is indicated for the treatment of locally advanced or metastatic non-small cell lung cancer after prior chemotherapy in adults. Neoadjuvant treatment of NSCLC OPDIVO in combination with platinum-based chemotherapy is indicated for the neoadjuvant treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%. Neoadjuvant and adjuvant treatment of NSCLC OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%.", "evidence": "Non-small cell lung cancer (NSCLC)", "confidence": 1.0 },
+    "Indication #": { "value": 4, "evidence": "4th indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO, in combination with platinum-based chemotherapy as neoadjuvant treatment, followed by OPDIVO as monotherapy as adjuvant treatment, is indicated for the treatment of resectable non-small cell lung cancer at high risk of recurrence in adult patients whose tumours have PD-L1 expression ≥ 1%.", "evidence": "neoadjuvant treatment ... followed by ... adjuvant treatment", "confidence": 1.0 },
+    "Treatment line": { "value": "_", "evidence": "", "confidence": 0.30 },
+    "Treatment modality": { "value": "Combination, Neoadjuvant, Adjuvant, Monotherapy", "evidence": "combination ... neoadjuvant ... followed by ... monotherapy as adjuvant", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "resectable non-small cell lung cancer at high risk of recurrence", "evidence": "resectable non-small cell lung cancer at high risk of recurrence", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Malignant pleural mesothelioma (MPM)", "evidence": "Malignant pleural mesothelioma (MPM)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Malignant pleural mesothelioma (MPM) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable malignant pleural mesothelioma.", "evidence": "Malignant pleural mesothelioma (MPM)", "confidence": 1.0 },
+    "Indication #": { "value": 1, "evidence": "1st indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable malignant pleural mesothelioma.", "evidence": "first-line treatment", "confidence": 1.0 },
+    "Treatment line": { "value": "First line", "evidence": "first-line treatment", "confidence": 0.97 },
+    "Treatment modality": { "value": "Combination", "evidence": "in combination with ipilimumab", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "unresectable malignant pleural mesothelioma", "evidence": "unresectable malignant pleural mesothelioma", "confidence": 0.96 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Renal cell carcinoma (RCC)", "evidence": "Renal cell carcinoma (RCC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).", "evidence": "Renal cell carcinoma (RCC)", "confidence": 1.0 },
+    "Indication #": { "value": 1, "evidence": "1st indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults", "evidence": "after prior therapy", "confidence": 1.0 },
+    "Treatment line": { "value": "Second line", "evidence": "after prior therapy", "confidence": 0.95 },
+    "Treatment modality": { "value": "Monotherapy", "evidence": "as monotherapy", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "in adults", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "advanced renal cell carcinoma", "evidence": "advanced renal cell carcinoma", "confidence": 0.95 }
+  },
+  {
+    "Primary Disease_category": { "value": "Renal cell carcinoma (RCC)", "evidence": "Renal cell carcinoma (RCC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).", "evidence": "Renal cell carcinoma (RCC)", "confidence": 1.0 },
+    "Indication #": { "value": 2, "evidence": "2nd indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma", "evidence": "first-line treatment", "confidence": 1.0 },
+    "Treatment line": { "value": "First line", "evidence": "first-line treatment", "confidence": 0.97 },
+    "Treatment modality": { "value": "Combination", "evidence": "in combination with ipilimumab", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "intermediate/poor-risk advanced renal cell carcinoma", "evidence": "intermediate/poor-risk advanced renal cell carcinoma", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Renal cell carcinoma (RCC)", "evidence": "Renal cell carcinoma (RCC)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Renal cell carcinoma (RCC) OPDIVO as monotherapy is indicated for the treatment of advanced renal cell carcinoma after prior therapy in adults. OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with intermediate/poor-risk advanced renal cell carcinoma (see section 5.1). OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma (see section 5.1).", "evidence": "Renal cell carcinoma (RCC)", "confidence": 1.0 },
+    "Indication #": { "value": 3, "evidence": "3rd indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO in combination with cabozantinib is indicated for the first-line treatment of adult patients with advanced renal cell carcinoma", "evidence": "first-line treatment", "confidence": 1.0 },
+    "Treatment line": { "value": "First line", "evidence": "first-line treatment", "confidence": 0.97 },
+    "Treatment modality": { "value": "Combination", "evidence": "in combination with cabozantinib", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "advanced renal cell carcinoma", "evidence": "advanced renal cell carcinoma", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Classical Hodgkin lymphoma (cHL)", "evidence": "Classical Hodgkin lymphoma (cHL)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Classical Hodgkin lymphoma (cHL) OPDIVO as monotherapy is indicated for the treatment of adult patients with relapsed or refractory classical Hodgkin lymphoma after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin.", "evidence": "Classical Hodgkin lymphoma (cHL)", "confidence": 1.0 },
+    "Indication #": { "value": 1, "evidence": "1st indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO as monotherapy is indicated for the treatment of adult patients with relapsed or refractory classical Hodgkin lymphoma after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin", "evidence": "relapsed or refractory", "confidence": 1.0 },
+    "Treatment line": { "value": "Third line", "evidence": "after autologous stem cell transplant (ASCT) and treatment with brentuximab vedotin", "confidence": 0.95 },
+    "Treatment modality": { "value": "Monotherapy", "evidence": "as monotherapy", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "adult patients", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "relapsed or refractory classical Hodgkin lymphoma", "evidence": "relapsed or refractory classical Hodgkin lymphoma", "confidence": 0.95 }
+  },
+  
+  {
+    "Primary Disease_category": { "value": "Squamous cell cancer of the head and neck (SCCHN)", "evidence": "Squamous cell cancer of the head and neck (SCCHN)", "confidence": 0.96 },
+    "Disease_level_full_text": { "value": "Squamous cell cancer of the head and neck (SCCHN) OPDIVO as monotherapy is indicated for the treatment of recurrent or metastatic squamous cell cancer of the head and neck in adults progressing on or after platinum-based therapy", "evidence": "Squamous cell cancer of the head and neck (SCCHN)", "confidence": 1.0 },
+    "Indication #": { "value": 1, "evidence": "1st indication", "confidence": 1.0 },
+    "Indication_text": { "value": "OPDIVO as monotherapy is indicated for the treatment of recurrent or metastatic squamous cell cancer of the head and neck in adults progressing on or after platinum-based therapy", "evidence": "progressing on or after platinum-based therapy", "confidence": 1.0 },
+    "Treatment line": { "value": "Second line", "evidence": "progressing on or after platinum-based therapy", "confidence": 0.95 },
+    "Treatment modality": { "value": "Monotherapy", "evidence": "as monotherapy", "confidence": 0.96 },
+    "Population": { "value": "Adult", "evidence": "in adults", "confidence": 0.94 },
+    "Disease + sybtypes": { "value": "recurrent or metastatic squamous cell cancer of the head and neck", "evidence": "recurrent or metastatic squamous cell cancer of the head and neck", "confidence": 0.95 }
+  },
+  
+  [
+  {
+    "Primary Disease_category": {
+      "value": "Urothelial carcinoma",
+      "evidence": "Urothelial carcinoma",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1).",
+      "evidence": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma.",
+      "evidence": "first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with cisplatin and gemcitabine",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable or metastatic urothelial carcinoma",
+      "evidence": "unresectable or metastatic urothelial carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Urothelial carcinoma",
+      "evidence": "Urothelial carcinoma",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1).",
+      "evidence": "Urothelial carcinoma OPDIVO as monotherapy is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 2,
+      "evidence": "2nd indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy",
+      "evidence": "after failure of prior platinum-containing therapy",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "Second line",
+      "evidence": "after failure of prior platinum-containing therapy",
+      "confidence": 0.95
+    },
+    "Treatment modality": {
+      "value": "Monotherapy",
+      "evidence": "as monotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "in adults",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "locally advanced unresectable or metastatic urothelial carcinoma",
+      "evidence": "locally advanced unresectable or metastatic urothelial carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Urothelial carcinoma",
+      "evidence": "Urothelial carcinoma",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Urothelial carcinoma OPDIVO in combination with cisplatin and gemcitabine is indicated for the first-line treatment of adult patients with unresectable or metastatic urothelial carcinoma. OPDIVO as monotherapy is indicated for the treatment of locally advanced unresectable or metastatic urothelial carcinoma in adults after failure of prior platinum-containing therapy. Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%, who are at high risk of recurrence after undergoing radical resection of MIUC (see section 5.1)",
+      "evidence": "Adjuvant treatment of urothelial carcinoma OPDIVO as monotherapy is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 3,
+      "evidence": "3rd indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adults with muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%, who are at high risk of recurrence after undergoing radical resection of MIUC",
+      "evidence": "adjuvant treatment of adults with muscle invasive urothelial carcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "Second line",
+      "evidence": "after undergoing radical resection",
+      "confidence": 0.90
+    },
+    "Treatment modality": {
+      "value": "Monotherapy, Adjuvant",
+      "evidence": "as monotherapy ... adjuvant treatment",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adults",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%, who are at high risk of recurrence",
+      "evidence": "muscle invasive urothelial carcinoma (MIUC) with tumour cell PD-L1 expression ≥ 1%",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "evidence": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC) OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer; treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
+      "evidence": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer",
+      "evidence": "first-line treatment of unresectable or metastatic colorectal cancer",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with ipilimumab",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable or metastatic colorectal cancer",
+      "evidence": "unresectable or metastatic colorectal cancer",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "evidence": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC) OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings: - - first-line treatment of unresectable or metastatic colorectal cancer; treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
+      "evidence": "Mismatch repair deficient (dMMR) or microsatellite instability-high (MSI-H) colorectal cancer (CRC)",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 2,
+      "evidence": "2nd indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with ipilimumab is indicated for the treatment of adult patients with mismatch repair deficient or microsatellite instability-high colorectal cancer in the following settings-treatment of metastatic colorectal cancer after prior fluoropyrimidine-based combination chemotherapy",
+      "evidence": "after prior fluoropyrimidine-based combination chemotherapy",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "Second line",
+      "evidence": "after prior fluoropyrimidine-based combination chemotherapy",
+      "confidence": 0.95
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with ipilimumab",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "metastatic colorectal cancer",
+      "evidence": "metastatic colorectal cancer",
+      "confidence": 0.95
+    }
+  },
+  [
+  {
+    "Primary Disease_category": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC)",
+      "evidence": "Oesophageal squamous cell carcinoma (OSCC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
+      "evidence": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%",
+      "evidence": "first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with ipilimumab",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "evidence": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC)",
+      "evidence": "Oesophageal squamous cell carcinoma (OSCC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
+      "evidence": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 2,
+      "evidence": "",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%",
+      "evidence": "first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with fluoropyrimidine- and platinum-based combination chemotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "evidence": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC)",
+      "evidence": "Oesophageal squamous cell carcinoma (OSCC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Oesophageal squamous cell carcinoma (OSCC) OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma with tumour cell PD-L1 expression ≥ 1%. OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy.",
+      "evidence": "OPDIVO as monotherapy is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 3,
+      "evidence": "",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy is indicated for the treatment of adult patients with unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma after prior fluoropyrimidine- and platinum-based combination chemotherapy",
+      "evidence": "after prior fluoropyrimidine- and platinum-based combination chemotherapy",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "Second line",
+      "evidence": "after prior fluoropyrimidine- and platinum-based combination chemotherapy",
+      "confidence": 0.95
+    },
+    "Treatment modality": {
+      "value": "Monotherapy",
+      "evidence": "as monotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "evidence": "unresectable advanced, recurrent or metastatic oesophageal squamous cell carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Oesophageal or gastro-oesophageal junction cancer (OC or GEJC)",
+      "evidence": "Oesophageal or gastro-oesophageal junction cancer (OC or GEJC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Adjuvant treatment of oesophageal or gastro-oesophageal junction cancer (OC or GEJC) OPDIVO as monotherapy is indicated for the adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease following prior neoadjuvant chemoradiotherapy",
+      "evidence": "Adjuvant treatment of oesophageal or gastro-oesophageal junction cancer",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO as monotherapy is indicated for the adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease following prior neoadjuvant chemoradiotherapy",
+      "evidence": "adjuvant treatment of adult patients with oesophageal or gastro-oesophageal junction cancer",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "Second line",
+      "evidence": "following prior neoadjuvant chemoradiotherapy",
+      "confidence": 0.90
+    },
+    "Treatment modality": {
+      "value": "Monotherapy, Adjuvant",
+      "evidence": "as monotherapy ... adjuvant treatment",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "oesophageal or gastro-oesophageal junction cancer who have residual pathologic disease",
+      "evidence": "residual pathologic disease",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma",
+      "evidence": "Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Gastric, gastro-oesophageal junction (GEJ) or oesophageal adenocarcinoma OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma whose tumours express PD-L1 with a combined positive score (CPS) ≥ 5",
+      "evidence": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with fluoropyrimidine- and platinum-based combination chemotherapy is indicated for the first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma whose tumours express PD-L1 with a combined positive score (CPS) ≥ 5",
+      "evidence": "first-line treatment of adult patients with HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with fluoropyrimidine- and platinum-based combination chemotherapy",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma",
+      "evidence": "HER2-negative advanced or metastatic gastric, gastro-oesophageal junction or oesophageal adenocarcinoma",
+      "confidence": 0.95
+    }
+  },
+  
+  [
+  {
+    "Primary Disease_category": {
+      "value": "Hepatocellular carcinoma (HCC)",
+      "evidence": "Hepatocellular carcinoma (HCC)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma",
+      "evidence": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "OPDIVO in combination with ipilimumab is indicated for the first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma",
+      "evidence": "first-line treatment of adult patients with unresectable or advanced hepatocellular carcinoma",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "First line",
+      "evidence": "first-line treatment",
+      "confidence": 0.97
+    },
+    "Treatment modality": {
+      "value": "Combination",
+      "evidence": "in combination with ipilimumab",
+      "confidence": 0.96
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "adult patients",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "unresectable or advanced hepatocellular carcinoma",
+      "evidence": "unresectable or advanced hepatocellular carcinoma",
+      "confidence": 0.95
+    }
+  },
+  {
+    "Primary Disease_category": {
+      "value": "Neovascular (wet) age-related macular degeneration (AMD)",
+      "evidence": "Neovascular (wet) age-related macular degeneration (AMD)",
+      "confidence": 0.96
+    },
+    "Disease_level_full_text": {
+      "value": "Lucentis is indicated in adults for: The treatment of neovascular (wet) age-related macular degeneration (AMD)",
+      "evidence": "Lucentis is indicated in adults",
+      "confidence": 1.0
+    },
+    "Indication #": {
+      "value": 1,
+      "evidence": "1st indication",
+      "confidence": 1.0
+    },
+    "Indication_text": {
+      "value": "Lucentis is indicated in adults for: The treatment of neovascular (wet) age-related macular degeneration (AMD)",
+      "evidence": "The treatment of neovascular (wet) age-related macular degeneration (AMD)",
+      "confidence": 1.0
+    },
+    "Treatment line": {
+      "value": "_",
+      "evidence": "Not mentioned in text",
+      "confidence": 0.30
+    },
+    "Treatment modality": {
+      "value": "_",
+      "evidence": "Not mentioned in text",
+      "confidence": 0.30
+    },
+    "Population": {
+      "value": "Adult",
+      "evidence": "in adults",
+      "confidence": 0.94
+    },
+    "Disease + sybtypes": {
+      "value": "neovascular (wet) age-related macular degeneration (AMD)",
+      "evidence": "neovascular (wet) age-related macular degeneration (AMD)",
+      "confidence": 0.96
+    }
+  }
 ]
+
 """  # Replace with your actual prompt
 
 # Function to clean JSON response
